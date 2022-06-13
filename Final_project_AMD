@@ -1,0 +1,480 @@
+---
+title: "Promoció d'activitats d'oci per part d'ajuntaments."
+author: "Núria Bosch, Toni Bosch, Heribert Roig"
+date: "14/06/2022"
+linkcolor: blue
+urlcolor: blue
+output: 
+  pdf_document:
+    toc: yes 
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, error = F, message = F, fig.align = "center")
+```
+```{r, include=FALSE}
+options(tinytex.verbose = TRUE)
+```
+```{r, include = FALSE}
+library(MASS)
+library(ggplot2)
+library(vegan)
+library(cluster)  
+library(factoextra) 
+library(clusterSim) 
+library(MVN)
+library(biotools) 
+library(Hotelling) 
+library(knitr)
+library(plyr)
+```
+
+\pagebreak
+
+# Introducció
+Recentment, la Unió Europea ha destinat un seguit de fons econòmics per a la cooperació i el desenvolupament social dels pobles i ciutats de menys de 30.000 habitants. 
+Aquests fons han d'anar destinats a la promoció d'activitats d'oci com ara: Galeries d'Art, Espais de dansa, Bars de sucs, Restaurants, Museus, Hotels/Resorts, Espais de "Picnic", Platges, Teatres i Institucions Religioses.
+
+Per a l'obtenció del fons, cada una de les ciutats que hi apliquin han de complir amb els següents requisits:
+
+a) Els fons s'han d'invertir a través de promocions de les diferents activitats d'oci.
+
+b) Les promocions han d'anar dirigides a un públic interessat en l'activitat d'oci en qüestió per augmentar l'eficiència de l'ajut.
+
+c) Les campanyes de promoció de les activitats han d'intentar anar focalitzades a conjunts de persones (interessos similars per les activitats d'oci promocionades) amb la finalitat de rentabilitzar les inversions dels ajuntaments.
+
+Per tant, el que es vol desenvolupar és aconseguir categoritzar el interessos de la població per a invertir de la millor forma els ajuts proporcionats per la Unió Europea.
+
+## Dataset
+
+La base de dades s'han extret de la pàgina web de la Universitat de Califòrnia a partir del següent enllaç: <https://archive.ics.uci.edu/ml/datasets/Travel+Reviews#> on s'explica que les dades s'han obtingut de la web TripAdvisor.com considerant les ressenyes de 10 categories (activitats d'oci) a l'est d'Àsia.
+Cada punutació corresponent a cada viatger s'assigna com Excel·lent (4), Molt bo (3), Intermig (2), Pobre (1) i terrible (0) i els valors que inclou la base de dades és la punutació mitjana de cada categoria per usuari, concretament s'inclouen 980 usuaris.
+
+Les 11 variables que trobem a la base de dades són:
+
+- *User_ID*: Identificador de l'usuari.
+
+- *Art_gallery*: punutació mitjana de les galeries d'art  per usuari.
+
+- *Dance_clubs*: punutació mitjana dels espais de dansa per usuari.
+
+- *Juice_bars*: punutació mitjana dels bars de sucs per usuari.
+
+- *Restaurants*: punutació mitjana dels restaurants per usuari.
+
+- *Museums*: punutació mitjana dels museus per usuari.
+
+- *Resorts*: punutació mitjana dels hotels per usuari.
+
+- *Parks_picnic_spots*: punutació mitjana dels espais de picnic per usuari.
+
+- *Beaches*: punutació mitjana de les platges per usuari.
+
+- *Theaters*: punutació mitjana dels teatres per usuari.
+
+- *Religious_inst.*: punutació mitjana de les institucions religioses per usuari.
+
+```{r}
+data<-read.csv("tripadvisor_review.csv")
+colnames(data) <- c("User_ID", "Art_gallery", "Dance_clubs", "Juice_bars", "Restaurants", "Museums", "Resorts", "Parks_picnic_spots", "Beaches", "Theaters", "Religious_inst.")
+str(data)
+head(data)
+```
+
+## Objectius
+
+A partir de la descripció del problema, els objectius que considerem en aquest treball son els següents:
+
+- Determinar quines són les activitats amb una puntuació major.
+
+- Determinar si podem agrupar els usuaris segons les puntuacions que tenen en les activitats.
+
+- Determinar si les puntuacions estan correlacionades en diferents activitats (Si al mateix grup de persones li agraden principalment dos activitats, no les podem programar alhora).
+
+## Abast
+
+- Considerarem que només podem programar X activitats.
+
+- Considerarem que els usuaris només participaran en Y activitats durant la seva visita.
+
+- ...
+
+# Anàlisi descriptiu de les variables
+
+Com que la variable *ID* no ens aporta valor, ja que cada observació correspon a un usuari diferent, decidim eliminar-la i, a més, avaluem el número de dades perdudes que hi ha a la base de dades i observem que no n'hi ha cap.
+```{r, include=F}
+data$User_ID <- NULL
+sum(is.na(data))
+```
+
+```{r, include=F}
+summary(data)
+```
+
+```{r, fig.width=7, fig.height=3}
+par(mfrow=c(2,2))
+for (i in (1:(dim(data)[2]))){
+  boxplot(data[,i], ylim = c(0, 4))
+  title(colnames(data)[i])
+}
+```
+
+Realitzant un resum de les dades i la representació d'un gràfic de barres per cada variable s'observa que totes les variables estan dins el rang [0,4] però veiem també que hi ha algunes variables que tenen major variabilitat que d'altres. Per exemple, la puntuació mitjana en bars de sucs té una variabilitat molt més alta que la puntuació mitjana en parcs i llocs de pícnic.
+Llavors, per a què aquesta variabilitat no ens afecti en la realització dels grups decidim escalar les dades tot i que totes les variables tinguin les mateixes unitats.
+
+A continuació estudiem la correlació de variables 2 a 2:
+
+```{r, fig.width=6, fig.height=4}
+library(corrplot)
+C <- cor(data)
+par(mfrow=c(1,1))
+corrplot(C, method = 'number')
+```
+
+El que s'observa és que les variables més correlacionades són *parks_picnic_spots* amb *juice_bars* (coeficient de correlació = 0.75) i *Religious_inst* (coeficient de correlació = -0.71).
+
+# Metodologia
+
+Per decidir quina distància utilitzar entre els usuaris de la base de dades com ja s'ha comentat anteriorment escalarem les dades prèviament a calcular la distància entre individus ja que així evitarem que hi hagi algunes variables amb contribucions més baixes degut a la seva baixa variabilitat. Llavors, com que en aquesta base de dades el 0 no té un valor qualitatiu sinó quantitatiu i les variables son contínues decidim utilitzar la distància euclídea. En cas que el 0 tingués un significat qualitatiu, s'hauria d'utilitzar una distància per perfils.
+
+Comentar també que hem decidit no utilitzar la distància Mahalanobis ja que no s'ha trobat una elevada correlació entre variables, únicament dos coeficients al voltant del 0.70 entre dues variables i per tant hem considerat millor utilitzar la distància euclídea amb les dades escalades.
+
+```{r}
+library(StatMatch)
+X<-data
+X<-scale(X) #escalar
+D<-dist(X)  #distancia euclidea
+```
+
+Un cop obtinguda la matriu d'interdistàncies procedim a realitzar, per una banda, l'agrupament jeràrquic pels mètodes de la mitjana, de Ward, simple i complet i, per l'altra banda, l'agrupament no jeràrquic mitjançant els mètodes de Pseudo-F, Silueta i TESS. Finalment, un cop s'hagin considerat quines son les alternatives que concorden més amb les característiques de la base de dades es procedirà a la classificació en el nombre de grups determinat mitjançant el mètode PAM en el qual s'introdueix la matriu d'interdistàncies euclídea, aquest mètode és més robust pels valors atípics que el mètode k-means ja que treballa amb les medianes.
+
+La representació gràfica dels grups en 2 eixos es farà mitjançant l'anàlisi de components principals (PCA) ja que s'ha utilitzat la distància euclídea.
+
+# Resultats i la seva interpretació
+
+## Construcció de grups
+
+### Agrupament jeràrquic
+A continuació es realitza l'agrupament jeràrquic pels mètodes: de la mitjana, de Ward, simple i complet i, utilitzant la distància euclídea només s'observa una classificació homogènia en el dendograma pel mètode de Ward, obtenint que k=2.
+
+```{r}
+clusterAv.E<-hclust(D,method= "average")
+clusterW.E<-hclust(D,method= "ward.D2")
+clusterS.E<-hclust(D,method= "single")
+clusterC.E<-hclust(D,method= "complete")
+par(mfrow=c(2,2))
+plot(clusterAv.E,cex=0.6)
+plot(clusterW.E,cex=0.6)
+plot(clusterS.E,cex=0.6)
+plot(clusterC.E,cex=0.6)
+```
+
+#### Correlació cofenètica
+
+(FALTA EXPLICAR I INTERPRETAR AIXÒ DE LA CORRELACIÓ COFENÈTICA, jo crec q no cal incloure-ho)
+```{r}
+W.coph.E<-cophenetic(clusterW.E)
+plot(W.coph.E,D)
+text(1,12,round(cor(W.coph.E,D)^2,2))
+groups.2_E<-cutree(clusterW.E,2)  # 2 grups
+table(groups.2_E)
+plot(clusterW.E,hang=-1,main="Ward method, Euclidean distance",cex=0.65)
+rect.hclust(clusterW.E,k=2,border="blue")
+```
+
+
+### Agrupament no jeràrquic
+
+Analitzarem el número de clusters amb els mètodes de Pseudo-F, Silueta i TESS. Analitzarem des de 2 fins a 10 clusters.
+
+1. **Pseudo-F:**
+
+```{r}
+library(clusterSim)
+PseudoF<-data.frame()
+for (centers in c(2:10)){
+  km.euc<-pam(D,centers,diss=T)  # Partitioning Around Medoids
+  PseudoF.euc<-index.G1(x=X, cl=km.euc$cluster, d=D, centrotypes = "medoids")
+  PseudoF[centers-1,1]<-centers
+  PseudoF[centers-1,2]<-PseudoF.euc
+}
+kable(PseudoF,col.names=c("Grups","Pseudo-F"))
+```
+
+A partir del mètode Pseudo-F s'obté k = 2 com a primera opció i k = 3 com a segona opció.
+
+2. **Silueta:**
+```{r}
+library(factoextra)
+sil<-fviz_nbclust(X, pam, diss=D, method = "sil") 
+kable(sil$data,col.names=c("Grups","Silueta"))
+```
+
+A partir del mètode Silueta, el nombre de grups òptim és k = 2.
+
+3. **TESS i gradient TESS**
+```{r, include=F}
+TESS<-fviz_nbclust(X, FUNcluster= pam, diss=NULL, k.max=10, method = "wss")
+source("func.R")
+TESS2<-my_fviz_nbclust(X, FUNcluster= pam, diss=NULL, k.max=10, method = "wss") 
+cat('de 1 a 2','\n')
+(TESS$data[1,2]-TESS2$data[2,2])*100/TESS2$data[1,2]
+cat('de 2 a 3','\n')
+(TESS2$data[2,2]-TESS2$data[3,2])*100/TESS2$data[2,2]
+cat('de 3 a 4','\n')
+(TESS2$data[3,2]-TESS2$data[4,2])*100/TESS2$data[3,2]
+cat('de 4 a 5','\n')
+(TESS2$data[4,2]-TESS2$data[5,2])*100/TESS2$data[4,2]
+cat('de 5 a 6','\n')
+(TESS2$data[5,2]-TESS2$data[6,2])*100/TESS2$data[5,2]
+cat('de 6 a 7','\n')
+(TESS2$data[6,2]-TESS2$data[7,2])*100/TESS2$data[6,2]
+cat('de 7 a 8','\n')
+(TESS2$data[7,2]-TESS2$data[8,2])*100/TESS2$data[7,2]
+```
+```{r}
+mat<-matrix(c(2,3,4,5,6,7,8,20.74,8.62,8.96,7.28,6.35,5.44,4.64),nrow=7,ncol=2,byrow=F)
+kable(mat,col.names=c("Grups","Gradient TESS"))
+```
+
+A partir del mètode del gradient de TESS, el nombre de grups òptim és k = 2.
+
+Resumint i considerant tots els mètodes tant jeràrquics com no jeràrquics s'obté que k = 2 és el nombre de grups més comú entre tots els mètodes i k = 3 n'és la segona opció obtinguda pel mètode Pseudo-F. Per tant, a continuació s'executarà el PAM amb k = 2 i k = 3.
+
+#### Execució de PAM amb k = 2
+```{r, include = F}
+k<-2
+pam.2 <- pam(D,k,diss=T)
+pam.2$medoids
+table(pam.2$clustering)
+```
+Els 2 usuaris representants de cada un dels grups són el 459 i el 58 i concretament hi ha 301 i 670 usuaris a cada grup, respectivament.
+
+#### Execució de PAM amb k = 3
+```{r, include = F}
+k3<-3
+pam.3 <- pam(D,k3,diss=T)
+pam.3$medoids
+table(pam.3$clustering)
+```
+Els 3 usuaris representants de cada un dels grups són el 78, el 591 i el 620 i concretament hi ha 243, 490 i 247 usuaris a cada grup, respectivament.
+
+## Interpretació dels grups
+### Representació gràfica en dos eixos: Anàlisis de components principals (PCA)
+
+Com que hem utilitzat la distància euclídea, per tal de fer la representació gràfica en 2 eixos, utilitzem l'anàlisi de components principals (PCA).
+A continuació es mostren els valors dels 3 primers components principals.
+```{r}
+pca.pam <- prcomp(X) 
+kable(round(pca.pam$rotation[,1:3],2))
+library(factoextra)
+fviz_eig(pca.pam)
+fviz_pca_biplot(pca.pam, axes = c(1,2), geom = "text", repel = T)
+```
+Com es pot observar en el gràfic de barres, el primer component principal (PC1) explica un 29,8% de la variabilitat total i el segon (PC2) un 12,6%, per tant, la representació gràfica en 2 eixos no representa exactament la realitat de les dades ja que entre els dos només expliquen un 42,4%.
+
+A l'altra gràfic es representen les diferents variables en els 2 eixos considerats i es veu que gran part de les variables es troben a la part positiva de l'eix X, mentre que en referència a l'eix Y es situen per tot el domini.
+
+A continuació es caracteritzen els dos eixos de coordenades:
+
+**Eix X (eix 1)**
+```{r}
+kable(Axis1<-round(cor(pca.pam$x[,1], data),3))
+```
+Tal i com s'observa a la taula, l'eix X es caracteritza per tenir valors alts en bars de sucs, hotels/resorts i parcs de picnic i valors baixos i negatius en institucions religioses, platges i galeries d'art.
+
+**Eix Y (eix 2)**
+```{r}
+kable(Axis2<-round(cor(pca.pam$x[,2], data),3))
+```
+Per altra banda, l'eix Y es caracteritza per tenir valors alts en bars de sucs i galeries d'art i valors baixos i negatius en museus, clubs de dansa, platges, teatres i institucions religioses.
+
+#### Representació i caracterització dels grups per k = 2
+
+En referència als grups per k = 2, a continuació es mostren els valors de cada variable dels representants de cada grup que per tant són com una mitjana de cada grup.
+```{r}
+kable(X[pam.2$medoids,][,1:5])
+kable(X[pam.2$medoids,][,6:10])
+```
+(MOSTRAR EN UN GRÀFIC COM QUEDEN ELS GRUPS (2 barplots, 1 amb colors complementaris...))
+
+I la representació gràfica en 2 eixos és la següent:
+```{r}
+clusplot(pca.pam$x[,1:2], pam.2$clustering, lines=0, shade=T, main="PAM", xlab="Axis 1", ylab="Axis 2",color=T)
+text(pca.pam$x[,1], pca.pam$x[,2], labels= pam.2$cluster, pos=1, cex=0.75, offset=0.3)
+```
+```{r, include=F}
+for (i in unique(pam.2$clustering)){
+  cat("Cluster", i, "\n")
+  print(apply(data[pam.2$clustering==i,],2,summary))
+}
+```
+Cada grup presenta unes característiques concretes:
+
+- **Grup 1 (459):** usuaris amb puntuació elevada de parcs de picnic, platges, hotels/resorts i institucions religioses, puntuació intermitja de clubs de dansa, bars de sucs, museus i teatres i puntuació baixa de galeries d'art i restaurants.
+
+- **Grup 2 (58):** usuaris amb puntuació elevada de parcs de picnic, platges i institucions religioses, puntuacions intermitges de clubs de dansa, hotels/resorts i teatres i puntuació baixa de galeries d'art, bars de sucs, restaurants i museus.
+
+#### Representació i caracterització dels grups per k = 3
+
+En referència als grups per k = 3, a continuació es mostren els valors de cada variable dels representants de cada grup que per tant són com una mitjana de cada grup.
+```{r}
+kable(X[pam.3$medoids,][,1:5])
+kable(X[pam.3$medoids,][,6:10])
+```
+(MOSTRAR EN UN GRÀFIC COM QUEDEN ELS GRUPS (2 barplots, 1 amb colors complementaris...))
+
+I la representació dels 3 grups en 2 eixos és la següent:
+```{r}
+clusplot(pca.pam$x[,1:2], pam.3$clustering, lines=0, shade=T, main="PAM", xlab="Axis 1", ylab="Axis 2",color=T)
+text(pca.pam$x[,1], pca.pam$x[,2], labels= pam.3$cluster, pos=1, cex=0.75, offset=0.3)
+```
+```{r, include=F}
+for (i in unique(pam.3$clustering)){
+  cat("Cluster", i, "\n")
+  print(apply(data[pam.3$clustering==i,],2,summary))
+}
+```
+Cada grup presenta unes característiques concretes:
+
+- **Grup 1 (78):** usuaris amb puntuació elevada de parcs de picnic, platges, hotels/resorts i institucions religioses, puntuació intermitja de clubs de dansa, bars de sucs, museus i teatres i puntuació baixa de galeries d'art i restaurants.
+
+- **Grup 2 (591):** usuaris amb puntuació elevada de parcs de picnic, platges i institucions religioses, puntuacions intermitges de clubs de dansa, hotels/resorts i teatres i puntuació baixa de galeries d'art, bars de sucs, restaurants i museus.
+
+- **Grup 3 (620):** usuaris amb puntuació elevada de parcs de picnic, platges i institucions religioses, puntuacions intermitges de clubs de dansa, hotels/resorts i teatres i puntuació baixa de galeries d'art, bars de sucs, restaurants i museus.
+
+Observem que els 3 grups presenten molts solapaments i que els grups 2 i 3 són pràcticament idèntics, tan sols varien lleugerament les mitjanes de la punutació per cada variable.
+
+## Validació dels grups
+Per validar els grups i saber si realment als gràfics en 2 dimensions anteriors hi podem dibuixar les el·lipses o no s'ha de comprovar si es segueix la distribució normal o no. S'ha d'estudiar la normalitat per separat en el cas de k = 2 i k = 3.
+
+FER TEST DE NORMALITAT I DE DIFERÈNCIA DE MITJANES
+
+
+## Anàlisi discriminant
+INVENTAR-NOS 2 USUARIS EXTRES PER VEURE A QUIN GRUP ES CLASSIFIQUEN (fer com practica d'ecosistemes, deix sa taula preparada per omplir-la)
+I DETERMINAR I JUSTIFICAR QUIN DELS 3 DISCRIMINADORS UTILITZEM: lineal, quadràtic, logístic
+```{r}
+dat<-matrix(c(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0),nrow=2,ncol=10,byrow=T)
+kable(dat,col.names=c("Art_gallery", "Dance_clubs", "Juice_bars", "Restaurants", "Museums", "Resorts", "Parks_picnic_spots", "Beaches", "Theaters", "Religious_inst."))
+```
+
+(A PARTIR D'AQUÍ ES LA PART QUE HAVIA INCLÒS EN HERIBERT INICIALMENT PERÒ HAVIA FET DIST MAHALAN. PER TANT CREC QUE HO HAUREM DE FER DIFERENT)
+#### Canonical discriminant analysis
+(MIRAR SI FUNCIONA O NO)
+
+```{r}
+W<-matrix(rep(0,ncol(X)*ncol(X)),ncol(X),ncol(X)) # matriu de 10x10 que son les variables que tenim disponibles al conjunt de dades.
+classes<-unique(pam.3$clustering)  # k=6
+for(i in 1:length(classes)){
+  sel<-which(pam.3$clustering==classes[i])
+  n<-length(sel)
+  S<-cov(X[sel,])
+  W<-W+S*(n-1)      # necesitamos la S no corregida
+}
+Spooled<-W/(nrow(X)-k)
+Spooled
+```
+Obtenim una matriu de variances-covariances de la variabilitat intra grups
+
+##### Between variability (Step 2)
+
+```{r}
+M<-apply(X,2,mean)
+M # general mean vector
+B<-matrix(rep(0,ncol(X)*ncol(X)),ncol(X),ncol(X))
+for(i in 1:length(classes)){
+  sel<-which(pam.3$clustering==classes[i])
+  n<-length(sel)
+  subX<-X[sel,]
+  m<-apply(subX,2,mean)
+  B<-B+n*(m-M)%*%t(m-M)
+}
+B
+```
+Matriu var-cov entre grups
+
+##### Find new coordinates (Step 3)
+```{r}
+A<-solve(Spooled)%*%B
+# A<-(Spooled)%*%B
+vecs<-eigen(A)$vectors
+Y<-as.matrix(X)%*%vecs
+```
+
+##### Data representation (Step 4)
+
+```{r}
+df<-data.frame(Y[,1],Y[,2],as.factor(pam.3$cluster))
+colnames(df)<-c("Dim1", "Dim2", "cluster")
+#ggplot(df, aes(Dim1, Dim2, color = cluster))+
+  #geom_point() #+
+  # stat_ellipse(type = "euclid", level=0.9)+coord_fixed()
+```
+
+Alternatively, convex hull representation (In the plane it is the smallest convex polygon that contains the points).
+
+```{r}
+find_hull <- function(df) df[chull(df$Dim1,df$Dim2),]
+hulls <- ddply(df,"cluster", find_hull)
+#ggplot(df, aes(x=Dim1, y=Dim2, color=cluster, 
+#                fill=cluster)) +
+#geom_polygon(data=hulls,alpha=0.5) +
+#geom_point(size=1) 
+```
+
+##### Understanding data representation (Step 5)
+```{r}
+## Interpretacion de los ejes de representación
+#round(cor(Y[,1],as.matrix(X)),2)
+#round(cor(Y[,2],as.matrix(X)),2)
+```
+
+### Test multivariant
+
+#### Normalitat
+Check whether the multivariate skewness and kurtosis are consistent with a multivariate normal distribution.
+Bajo Ho, el estadístico skewness es khi-2 y el estadistico de la kurtosis es N(0,1).
+
+```{r}
+library(MVN)
+for(i in 1:k){
+  data.subset<-X[pam.3$clustering==i,]
+  cat('cluster', i, " Determinant = ", round(det(cov(data.subset)), 3), '\n')
+  res<-mvn(data.subset,mvnTest="mardia",multivariatePlot="qq") #
+  print(res$multivariateNormality)
+  print(res$univariateNormality)
+}
+```
+
+En el test de normalidad, NO se puede aceptar la hipótesis nula, que asume que los todos datos son normales.
+
+Hacemos test de normalidad univariante y vemos que no son normales. Si ellas solas no son normales, el conjunto no será norma
+
+```{r}
+library(biotools)  # Homogenety variances
+# Box's M-test for homogeneity of covariance matrices
+boxM(X,pam.3$clustering)
+```
+Var-Cov matrix non constant
+
+##### Pairwise comparison
+Si no són normals, no es pot utilitzar l'estadístic T-Hotellin. Amb la funció hotelling.test li posem els grups que volem comparar (g1 i g2) i li fem el test chi-quadrat
+
+```{r}
+library(Hotelling)  # Hotelling
+g1<-X[pam.3$clustering==1,]
+g2<-X[pam.3$clustering==2,]
+ht12<-hotelling.test(g1, g2, test="chi") # 
+ht12
+```
+(FINAL PART HERIBERT)
+
+# Conclusions i discussió
+
+# Apèndix amb el codi d'R
+En aquest apèndix s'inclourà tot el codi d'R utilitzat per a la realització d'aquest treball.
+
+```{r some-code, ref.label=knitr::all_labels()[-c(1:3)], echo=TRUE, eval=FALSE}
+```
